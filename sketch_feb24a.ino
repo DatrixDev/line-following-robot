@@ -17,11 +17,13 @@ int Speed = 200;
 bool modeLine = false;
 int lastPosition;
 int steering = 0;
-int previousError = 0;
 float kp = 1;
 float kd = 5;
 int line = 0;
+int cnt = 0;
 int rememberLine = 0;
+int speed_run_forward;
+unsigned char pattern, start;
 unsigned char sensor;
 unsigned int isCalib = 0;
 unsigned int sensorValue[8];
@@ -38,6 +40,29 @@ unsigned long prevMillis = 0;
 bool state = false;
 bool toggleColor = false;
 
+
+void timer_init() {
+  ASSR = (0 << EXCLK) | (0 << AS2);
+  TCCR2A = (0 << COM2A1) | (0 << COM2A0) | (0 << COM2B1) | (0 << COM2B0) | (0 << WGM21) | (0 << WGM20);
+  TCCR2B = (0 << WGM22) | (1 << CS22) | (1 << CS21) | (1 << CS20);
+  TCNT2 = 0xB2;
+  OCR2A = 0x00;
+  OCR2B = 0x00;
+  TIMSK2 = (0 << OCIE2B) | (0 << OCIE2A) | (1 << TOIE2);
+}
+ISR(TIMER2_OVF_vect) {
+  TCNT2 = 0xB2;
+  read_sensor();
+  cnt++;
+}
+// PID cập nhật 200 lần/giây
+void startLineTimer() {
+  TCNT2 = 0xB2;
+  TIMSK2 |= (1 << TOIE2);  // bật ngắt overflow
+}
+void stopLineTimer() {
+  TIMSK2 &= ~(1 << TOIE2);  // tắt ngắt overflow
+}
 void setup() {
   Serial.begin(9600);
   HC05.begin(115200);
@@ -52,42 +77,213 @@ void setup() {
   pinMode(RED, OUTPUT);
   pinMode(BLUE, OUTPUT);
   pinMode(GREEN, OUTPUT);
+  pattern = 10;
+  start = 0;
+  isCalib = 0;
+  timer_init();
+  stopLineTimer();
+  speed_run(0, 0);
+  RGB(3);
 }
 
 void loop() {
 
+  handleBluetooth();
+
   if (modeLine) {
-    read_sensor();  //doccambien
-    if (HC05.available()) {
-      char c = HC05.read();
-      Serial.println(c);
-      if (c == 'x') {
-        Stop();
-        modeLine = false;
-      }
-    }
-  } else {
-    if (HC05.available()) {
-      char c = HC05.read();
-      Serial.println(c);
-      switch (c) {
-        case 'F': tien(); break;
-        case 'B': lui(); break;
-        case 'R': phai(); break;
-        case 'L': trai(); break;
-        case 'G': tien_trai(); break;
-        case 'I': tien_phai(); break;
-        case 'H': lui_trai(); break;
-        case 'J': lui_phai(); break;
-        case 'S': Stop(); break;
-        case 'X':
-          Stop();
-          modeLine = true;
-          break;
-      }
-    }
+    runStateMachine();
   }
 }
+void handleBluetooth() {
+
+  if (!HC05.available()) return;
+
+  char cmd = HC05.read();
+  Serial.println(cmd);
+
+  switch (cmd) {
+
+    case 'X':
+      rememberLine = 0;
+      cnt = 0;
+      Stop();
+      modeLine = true;
+      startLineTimer();
+      pattern = 10;
+      start = 0;
+      isCalib = 0;
+      break;
+
+    case 'x':
+      Stop();
+      modeLine = false;
+      stopLineTimer();
+      break;
+
+    default:
+
+      if (!modeLine) return;
+
+      if (start == 0) {
+        if (isCalib == 0 && cmd == 'C') {
+          isCalib = 1;
+        } else if (isCalib == 1 && cmd == 'C') {
+          start = 1;
+          isCalib = 0;
+          speed_run_forward = 0;
+        }
+        return;
+      }
+
+      if (pattern == 10) {
+        if (cmd == '1') {
+          pattern = 11;
+          speed_run_forward = 0;
+          cnt = 0;  
+        }
+        if (cmd == '2') {
+          pattern = 11;
+          speed_run_forward = 50;
+          cnt = 0;
+        }
+        if (cmd == '3') {
+          pattern = 11;
+          speed_run_forward = 70;
+          cnt = 0;
+        }
+      }
+
+      if (cmd == 'S') {
+        Stop();
+        pattern = 100;
+      }
+
+      break;
+  }
+}
+void runStateMachine() {
+
+  if (start == 0 && isCalib == 1) {
+    learnLine();
+    return;
+  }
+
+  if (start == 0) return;
+
+  switch (pattern) {
+
+    case 10:
+      break;
+
+    case 11:
+
+      if (sensorMask(0x01) == 0x01) {
+        rememberLine = 1;
+        cnt = 0;
+      } else if (sensorMask(0x80) == 0x80) {
+        rememberLine = -1;
+        cnt = 0;
+      }
+
+      if (sensor == 0b00000000) {
+
+        if (rememberLine != 0) {
+
+          if (rememberLine == 1) {
+            pattern = 12;
+            handleAndSpeed(40, speed_run_forward);
+          } else if (rememberLine == -1) {
+            pattern = 12;
+            handleAndSpeed(-40, speed_run_forward);
+          } else {
+            pattern = 100;
+          }
+
+        } else {
+          speed_run(0, 0);
+        }
+
+        break;
+      } else {
+        runforwardline(speed_run_forward);
+      }
+
+      if (sensorMask(0b00111100) != 0b00000000) {
+        if (cnt > 50) rememberLine = 0;
+      }
+
+      break;
+
+    case 12:
+
+      if (rememberLine == 1) {
+        speed_run(100, -40);
+        pattern = 21;
+        break;
+      } else if (rememberLine == -1) {
+        speed_run(-40, 100);
+        pattern = 31;
+        break;
+      } else {
+        pattern = 11;
+        break;
+      }
+
+    case 21:
+      speed_run(100, -40);
+      RGB(1);
+
+      if (sensorMask(0xff) != 0) {
+        speed_run(60, 60 / 2);
+        pattern = 22;
+      }
+      break;
+
+    case 22:
+      speed_run(60, 60 / 2);
+      RGB(1);
+
+      if (sensorMask(0xfc) != 0) {
+        pattern = 11;
+      }
+      break;
+
+    case 31:
+      speed_run(-40, 60);
+      RGB(2);
+
+      if (sensorMask(0xff) != 0) {
+        speed_run(60 / 2, 60);
+        pattern = 32;
+      }
+      break;
+
+    case 32:
+      speed_run(60 / 2, 60);
+      RGB(2);
+
+      if (sensorMask(0x3f) != 0) {
+        pattern = 11;
+      }
+      break;
+
+    case 100:
+      speed_run(0, 0);
+      RGB(millis() / 100 % 3);
+      break;
+
+    default:
+      pattern = 11;
+      break;
+  }
+}
+void waitForStart() {
+  int led[] = { GREEN, RED };  // hoc mau
+  learnLine();
+  Blink(led, 2, 300);
+  speed_run_forward = 0;
+}
+
 void read_sensor()  // hàm đọc cảm biến
 {
   unsigned char tempBit = 0;
@@ -124,9 +320,11 @@ void read_sensor()  // hàm đọc cảm biến
     avg += (long)(sensorPID[j]) * ((j)*1000);
     sum += sensorPID[j];
   }
-  if(sum!=0)
-  i = (int)((avg / sum) - 3500);
-  
+  if (sum != 0)
+    i = (int)((avg / sum) - 3500);
+  else
+    i = 0;
+
   kp = 1;
   kd = 5;
   iP = kp * i;
@@ -175,7 +373,7 @@ void handleAndSpeed(int angle, int speedHAS) {
 void learnLine() {
   if (sensor == 0xff) {
     int color[] = { RED, BLUE };
-    Blink(color, 2);  //line full đen  = nhảy màu đỏ - xanh
+    Blink(color, 2, 300);  //line full đen  = nhảy màu đỏ - xanh
   }
 
   for (int i = 0; i < 8; i++) {
@@ -200,7 +398,7 @@ void learnLine() {
 //   digitalWrite(BUZZER, 0);
 // }
 
-void led(int color) {
+void RGB(int color) {
   switch (color) {
     case 0:  //đèn đỏ sáng
       digitalWrite(RED, 1);
@@ -224,10 +422,10 @@ void led(int color) {
       break;
   }
 }
-void Blink(int ledList[], int count) {
-  static int currentIndex = 0;   
+void Blink(int ledList[], int count, int time) {
+  static int currentIndex = 0;
 
-  if (millis() - prevMillis >= 200) {
+  if (millis() - prevMillis >= time) {
     prevMillis = millis();
 
     for (int i = 0; i < count; i++) {
@@ -340,6 +538,9 @@ void runforwardline(int tocdo)  // hàm chạy bám line
       handleAndSpeed(steering, tocdo);
       break;
   }
+}
+unsigned char sensorMask(unsigned char mask) {
+  return (sensor & mask);
 }
 void tien() {
   analogWrite(ENA, Speed);
