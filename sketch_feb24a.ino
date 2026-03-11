@@ -1,7 +1,7 @@
 #include <SoftwareSerial.h>
 SoftwareSerial HC05(2, 3);
-const int GREEN = 0;  //khi test rút dây
-const int RED = 1;    //khi test rút dây
+const int GREEN = 11;  //khi test rút dây
+const int RED = 12;    //khi test rút dây
 const int BLUE = 13;
 
 // const BUZZER = 4; //Chưa mua BUZZER
@@ -13,7 +13,7 @@ const int IN3 = 8;
 const int IN4 = 9;
 const int ENB = 10;
 
-int Speed = 200;
+int Speed = 250;
 bool modeLine = false;
 int lastPosition;
 int steering = 0;
@@ -101,64 +101,87 @@ void handleBluetooth() {
   char cmd = HC05.read();
   Serial.println(cmd);
 
+  if (cmd == 'X') {
+    Serial.println("Bat che do LINE FOLLOW");
+    RGB(2);
+    rememberLine = 0;
+    cnt = 0;
+    Stop();
+    modeLine = true;
+    startLineTimer();
+    pattern = 10;
+    start = 0;
+    isCalib = 0;
+    Serial.println("San sang calibration (bam F)");
+    return;
+  }
+
+  if (cmd == 'x') {
+    Serial.println("Tat che do LINE FOLLOW");
+    Serial.println("Robot dung");
+    RGB(0);
+    Stop();
+    modeLine = false;
+    stopLineTimer();
+    return;
+  }
+
+  if (modeLine) {
+
+    if (start == 0) {
+      if (isCalib == 0 && cmd == 'F') {
+        Serial.println("Bat dau hoc mau line (Calibration)");
+        RGB(0);
+        isCalib = 1;
+      } else if (isCalib == 1 && cmd == 'F') {
+        Serial.println("Hoan tat calibration");
+        Serial.println("San sang chon toc do");
+        RGB(1);
+        start = 1;
+        isCalib = 0;
+        speed_run_forward = 0;
+      }
+      return;
+    }
+
+    if (pattern == 10) {
+      if (cmd == 'B') {
+        Serial.println("Bat dau chay line - Toc do cham");
+        RGB(1);
+        pattern = 11;
+        speed_run_forward = 100;
+        cnt = 0;
+      }
+      if (cmd == 'L') {
+        Serial.println("Bat dau chay line - Toc do trung binh");
+        RGB(2);
+        pattern = 11;
+        speed_run_forward = 150;
+        cnt = 0;
+      }
+      if (cmd == 'R') {
+        Serial.println("Bat dau chay line - Toc do nhanh");
+        RGB(0);
+        pattern = 11;
+        speed_run_forward = 200;
+        cnt = 0;
+      }
+    }
+
+    return;
+  }
+
   switch (cmd) {
 
-    case 'X':
-      rememberLine = 0;
-      cnt = 0;
-      Stop();
-      modeLine = true;
-      startLineTimer();
-      pattern = 10;
-      start = 0;
-      isCalib = 0;
-      break;
-
-    case 'x':
-      Stop();
-      modeLine = false;
-      stopLineTimer();
-      break;
-
-    default:
-
-      if (!modeLine) return;
-
-      if (start == 0) {
-        if (isCalib == 0 && cmd == 'C') {
-          isCalib = 1;
-        } else if (isCalib == 1 && cmd == 'C') {
-          start = 1;
-          isCalib = 0;
-          speed_run_forward = 0;
-        }
-        return;
-      }
-
-      if (pattern == 10) {
-        if (cmd == '1') {
-          pattern = 11;
-          speed_run_forward = 0;
-          cnt = 0;  
-        }
-        if (cmd == '2') {
-          pattern = 11;
-          speed_run_forward = 50;
-          cnt = 0;
-        }
-        if (cmd == '3') {
-          pattern = 11;
-          speed_run_forward = 70;
-          cnt = 0;
-        }
-      }
-
-      if (cmd == 'S') {
-        Stop();
-        pattern = 100;
-      }
-
-      break;
+    case 'F': tien(); break;
+    case 'B': lui(); break;
+    case 'R': phai(); break;
+    case 'L': trai(); break;
+    case 'G': tien_trai(); break;
+    case 'I': tien_phai(); break;
+    case 'H': lui_trai(); break;
+    case 'J': lui_phai(); break;
+    case 'S': Stop(); break;
   }
 }
 void runStateMachine() {
@@ -278,7 +301,7 @@ void runStateMachine() {
   }
 }
 void waitForStart() {
-  int led[] = { GREEN, RED };  // hoc mau
+  int led[] = { GREEN, RED };   
   learnLine();
   Blink(led, 2, 300);
   speed_run_forward = 0;
@@ -356,7 +379,34 @@ void speed_run(int speedLeft, int speedRight) {
     digitalWrite(IN4, HIGH);
     analogWrite(ENB, -speedRight);
   }
+  static unsigned long lastMotor = 0;
+
+//   if (modeLine && millis() - lastMotor > 1000) {
+//     lastMotor = millis();
+
+//     Serial.print("Dong co trai (ENA): ");
+//     Serial.print(speedLeft);
+//     Serial.print(" | Dong co phai (ENB): ");
+//     Serial.println(speedRight);
+//   }
+
 }
+// void speed_run(int speedLeft, int speedRight) {
+
+//   static unsigned long lastMotor = 0;
+
+//   if (modeLine && millis() - lastMotor > 1000) {
+//     lastMotor = millis();
+
+//     Serial.print("Dong co trai (ENA): ");
+//     Serial.print(speedLeft);
+//     Serial.print(" | Dong co phai (ENB): ");
+//     Serial.println(speedRight);
+//   }
+
+//   analogWrite(ENA, 0);
+//   analogWrite(ENB, 0);
+// }
 void handleAndSpeed(int angle, int speedHAS) {
   int speedLeft;
   int speedRight;
@@ -368,6 +418,17 @@ void handleAndSpeed(int angle, int speedHAS) {
   }
   speedLeft = speedHAS + angle;
   speedRight = speedHAS - angle;
+
+static unsigned long lastMotorLog = 0;  
+if (millis() - lastMotorLog > 1000) {
+    lastMotorLog = millis();
+
+    Serial.print("Tinh toan dong co -> Trai: ");
+    Serial.print(speedLeft);
+    Serial.print(" | Phai: ");
+    Serial.println(speedRight);
+  }
+
   speed_run(speedLeft, speedRight);
 }
 void learnLine() {
@@ -538,6 +599,22 @@ void runforwardline(int tocdo)  // hàm chạy bám line
       handleAndSpeed(steering, tocdo);
       break;
   }
+  static unsigned long lastLog = 0;
+
+  if (millis() - lastLog >= 1000) {
+    lastLog = millis();
+
+    Serial.print("Cam bien: ");
+    for (int i = 7; i >= 0; i--) {
+      Serial.print((sensor >> i) & 1);
+    }
+
+    Serial.print(" | PID: ");
+    Serial.print(steering);
+
+    Serial.print(" | Line: ");
+    Serial.println(line);
+  }
 }
 unsigned char sensorMask(unsigned char mask) {
   return (sensor & mask);
@@ -563,7 +640,6 @@ void lui() {
 }
 
 void phai() {
-  analogWrite(ENA, Speed / 5);
   analogWrite(ENB, Speed);
 
   digitalWrite(IN1, HIGH);
@@ -575,7 +651,6 @@ void phai() {
 
 void trai() {
   analogWrite(ENA, Speed);
-  analogWrite(ENB, Speed / 5);
 
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
